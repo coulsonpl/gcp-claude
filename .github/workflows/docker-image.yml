@@ -19,10 +19,10 @@ jobs:
         include:
           - platform: linux/amd64
             os: ubuntu-latest
-          # - platform: linux/386
-          #   os: ubuntu-latest
-          # - platform: linux/ppc64le
-          #   os: ubuntu-latest
+          - platform: linux/386
+            os: ubuntu-latest
+          - platform: linux/ppc64le
+            os: ubuntu-latest
           - platform: linux/arm64
             os: ubuntu-latest
             # os: [self-hosted, linux, ARM64]
