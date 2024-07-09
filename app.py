@@ -2,6 +2,8 @@ import os
 import json
 import time
 import requests
+import re
+import random
 from flask import Flask, request, Response, jsonify, stream_with_context
 from requests.auth import HTTPBasicAuth
 import logging
@@ -12,14 +14,36 @@ load_dotenv()
 
 app = Flask(__name__)
 
-MODEL = 'claude-3-5-sonnet@20240620'
 ACCOUNTS = {}
 API_KEY = os.environ.get('API_KEY')
 TOKEN_URL = 'https://www.googleapis.com/oauth2/v4/token'
-LOCATIONS = ['europe-west1', 'us-east5']
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
+
+"""
+version为最新版本, 最新版本以对应模型的Vertex AI页面为准
+locations为可用区域, 多地区配额可叠加。
+支持区域以 https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude 为准
+"""
+MODEL_CONFIG = {
+    'claude-3-sonnet': {
+        'version': 'claude-3-sonnet@20240229',  # 截至2024年6月26日最新版本，仅供展示，下同
+        'locations': ["asia-southeast1", "us-central1", "us-east5"]
+    },
+    'claude-3-5-sonnet': {
+        'version': 'claude-3-5-sonnet@20240620',
+        'locations': ["us-east5", "europe-west1"]
+    },
+    'claude-3-opus': {
+        'version': 'claude-3-opus@20240229',
+        'locations': ["us-east5"]
+    },
+    'claude-3-haiku': {
+        'version': 'claude-3-haiku@20240307',
+        'locations': ["europe-west1", "europe-west4", "us-central1", "us-east5"]
+    }
+}
 
 # 解析账户信息
 for key, value in os.environ.items():
@@ -100,24 +124,25 @@ def get_access_token():
 def rotate_account():
     global current_account_index, current_location_index, request_count
     request_count += 1
+    account_keys = list(ACCOUNTS.keys())
+    if not account_keys:
+        raise Exception('No available accounts')
+
     if request_count >= 3:
         request_count = 0
-        current_location_index = (current_location_index + 1) % len(LOCATIONS)
-        if current_location_index == 0:
-            account_keys = list(ACCOUNTS.keys())
-            if not account_keys:
-                raise Exception('No available accounts')
-            current_account_index = (current_account_index + 1) % len(account_keys)
-    current_account_key = list(ACCOUNTS.keys())[current_account_index]
-    logging.info(f"Rotating to account: {current_account_key}, location: {LOCATIONS[current_location_index]}, request count: {request_count}")
+        current_account_index = (current_account_index + 1) % len(account_keys)
+    current_account_key = account_keys[current_account_index]
+    logging.info(f"Rotating to account: {current_account_key}, request count: {request_count}")
 
-def get_location():
-    return LOCATIONS[current_location_index]
+def get_location(model):
+    config = MODEL_CONFIG[model]
+    locations = config['locations']
+    return random.choice(locations)
 
-def construct_api_url(location):
+def construct_api_url(location, model):
     current_account_key = list(ACCOUNTS.keys())[current_account_index]
     current_account = ACCOUNTS[current_account_key]
-    return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['PROJECT_ID']}/locations/{location}/publishers/anthropic/models/{MODEL}:streamRawPredict"
+    return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['PROJECT_ID']}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict"
 
 def merge_messages(messages):
     last_role = None
@@ -133,8 +158,6 @@ def merge_messages(messages):
 
     return merged_messages
 
-@app.route('/', methods=['POST'])
-@app.route('/v1', methods=['POST'])
 @app.route('/v1/messages', methods=['POST'])
 def handle_request():
     api_key = request.headers.get('x-api-key')
@@ -148,11 +171,28 @@ def handle_request():
         }), 403
 
     try:
-        access_token = get_access_token()
-        location = get_location()
-        api_url = construct_api_url(location)
-
         request_body = request.json
+        model_with_version = request_body['model']
+        base_model = re.sub(r'-\d{8}$', '', model_with_version)
+        
+        if base_model in list(MODEL_CONFIG.keys()):
+            if re.search(r'-(\d{8})$', model_with_version):
+                model = re.sub(r'-(\d{8})$', r'@\1', model_with_version)
+            else:
+                model = base_model
+        else:
+            return jsonify({
+                "type": "error",
+                "error": {
+                    "type": "invalid_model",
+                    "message": "The specified model is not in the allowed list."
+                }
+            }), 400
+
+        access_token = get_access_token()
+        location = get_location(base_model)
+        api_url = construct_api_url(location, model)
+
         request_body['anthropic_version'] = "vertex-2023-10-16"
         request_body.pop('model', None)
 
