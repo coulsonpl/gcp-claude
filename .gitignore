@@ -1,0 +1,18 @@
+# Debug
+.env
+
+# OS General
+Thumbs.db
+.DS_Store
+
+# project
+*.cert
+*.key
+*.log
+bin/
+config.json
+
+# Develop tools
+.vscode/
+.idea/
+*.swp
