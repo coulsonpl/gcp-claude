@@ -4,6 +4,9 @@ on:
     branches: [ master ]
     tags:
       - '**'
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
 
 concurrency: 
   group: ${{ github.ref }}-${{ github.workflow }}
