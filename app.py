@@ -145,7 +145,8 @@ def construct_api_url(location, model):
     return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['PROJECT_ID']}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict"
 
 def merge_messages(messages):
-    if not messages:  # 如果 messages 为空,直接返回空列表
+    # 如果 messages 为空,直接返回空列表
+    if not messages:  
         return []
 
     merged_messages = []
@@ -161,6 +162,10 @@ def merge_messages(messages):
         else:
             last_role = message['role']
             merged_messages.append(message)
+
+    # 3.检查最后一条消息的role,如果不是user,则插入一条新消息
+    if merged_messages and merged_messages[-1]['role'] != 'user':
+        merged_messages.append({"role": "user", "content": "start"})
 
     return merged_messages
 
