@@ -145,10 +145,16 @@ def construct_api_url(location, model):
     return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['PROJECT_ID']}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict"
 
 def merge_messages(messages):
-    last_role = None
-    merged_messages = []
+    if not messages:  # 如果 messages 为空,直接返回空列表
+        return []
 
-    # 1. 丢弃相同角色的连续消息
+    merged_messages = []
+    # 1.检查第一条消息的role,如果不是user或system,则插入一条新消息
+    if messages and messages[0]['role'] not in ['user', 'system']:
+        merged_messages.append({"role": "user", "content": "start"})
+
+    last_role = None
+    # 2.丢弃相同角色的连续消息
     for message in messages:
         if message['role'] == last_role:
             logging.info(f'drop message: {message}')
