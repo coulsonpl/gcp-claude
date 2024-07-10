@@ -23,5 +23,5 @@ services:
 
 ### 环境变量说明
 * HTTP_PROXY: 指定所有请求通过的代理服务器的URL
-* ACCOUNT_XX: 账号信息参考 https://linux.do/t/topic/118702
+* ACCOUNT_XX: 账号信息参考 https://linux.do/t/topic/118702#gcp-1
 * API_KEY: 调用接口时的鉴权Token
