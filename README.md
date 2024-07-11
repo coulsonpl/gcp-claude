@@ -11,8 +11,6 @@ services:
     network_mode: bridge
     ports:
       - "3001:3000"
-    volumes:
-      - ./claude/logs:/usr/src/app/logs
     environment:
       - API_KEY=sk-xxxx
       - HTTP_PROXY=http://host:prot
