@@ -114,6 +114,10 @@ def get_access_token():
         current_account['failureCount'] += 1
         logging.info(f"Account {current_account_key} failure count: {current_account['failureCount']}")
 
+        if len(ACCOUNTS) == 1:
+            # If there's only one account, raise the exception immediately
+            raise Exception(f"Error obtaining access token for the only account: {str(e)}")
+
         if current_account['failureCount'] >= 3:
             logging.error(f"Account {current_account_key} has failed 3 times. Removing from rotation.")
             del ACCOUNTS[current_account_key]
