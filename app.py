@@ -92,7 +92,8 @@ def get_access_token():
                 'refresh_token': current_account['REFRESH_TOKEN'],
                 'grant_type': 'refresh_token'
             },
-            proxies=get_proxy()
+            proxies=get_proxy(),
+            timeout=10  # 设置 10 秒超时
         )
         response.raise_for_status()
         data = response.json()
