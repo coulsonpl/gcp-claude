@@ -1,13 +1,15 @@
 import os
 import json
-import time
 import requests
 import re
 import random
+from datetime import datetime
 from flask import Flask, request, Response, jsonify, stream_with_context
 from requests.auth import HTTPBasicAuth
 import logging
 from dotenv import load_dotenv
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request
 
 # 加载环境变量
 load_dotenv()
@@ -16,7 +18,8 @@ app = Flask(__name__)
 
 ACCOUNTS = {}
 API_KEY = os.environ.get('API_KEY')
-TOKEN_URL = 'https://www.googleapis.com/oauth2/v4/token'
+REFRESH_TOKEN_URL = 'https://www.googleapis.com/oauth2/v4/token'
+AUTH_DEFAULT_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -50,7 +53,8 @@ for key, value in os.environ.items():
     if key.startswith('ACCOUNT_'):
         account_name = key.replace('ACCOUNT_', '').lower()
         try:
-            ACCOUNTS[account_name] = json.loads(value)
+            account_data = json.loads(value)
+            ACCOUNTS[account_name] = {k.lower(): v for k, v in account_data.items()}
             ACCOUNTS[account_name]['failureCount'] = 0
         except json.JSONDecodeError:
             logging.error(f"Error parsing account info for {account_name}")
@@ -64,11 +68,6 @@ request_count = 0
 # 全局缓存字典,用于存储每个账号的access token和过期时间
 TOKEN_CACHE = {}
 
-def get_proxy():
-    http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
-    https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
-    return {'http': http_proxy, 'https': https_proxy}
-
 def get_access_token():
     global current_account_index
     account_keys = list(ACCOUNTS.keys())
@@ -81,32 +80,48 @@ def get_access_token():
     # 检查缓存中是否有有效的token
     if current_account_key in TOKEN_CACHE:
         token_info = TOKEN_CACHE[current_account_key]
-        if token_info['expiry_time'] > time.time():
+        if token_info['expiry_time'] > datetime.utcnow().timestamp():
             return token_info['access_token']
 
     try:
-        response = requests.post(TOKEN_URL, 
-            json={
-                'client_id': current_account['CLIENT_ID'],
-                'client_secret': current_account['CLIENT_SECRET'],
-                'refresh_token': current_account['REFRESH_TOKEN'],
-                'grant_type': 'refresh_token'
-            },
-            proxies=get_proxy(),
-            timeout=10  # 设置 10 秒超时
-        )
-        response.raise_for_status()
-        data = response.json()
-        logging.info(f'get_access_token: {data}')
+        if 'refresh_token' in current_account:
+            response = requests.post(REFRESH_TOKEN_URL, 
+                json={
+                    'client_id': current_account['client_id'],
+                    'client_secret': current_account['client_secret'],
+                    'refresh_token': current_account['refresh_token'],
+                    'grant_type': 'refresh_token'
+                },
+                timeout=10  # 设置 10 秒超时
+            )
+            response.raise_for_status()
+            data = response.json()
+            access_token = data['access_token']
+            expiry_timestamp = datetime.utcnow().timestamp() + data['expires_in']
+        else:
+            credentials = service_account.Credentials.from_service_account_info(
+                current_account, scopes=[AUTH_DEFAULT_SCOPE]
+            )
 
+            # 检查凭证是否过期
+            if not credentials.valid:
+                credentials.refresh(Request())
+
+            access_token = credentials.token
+            # 检查是否刷新成功
+            if not access_token:
+                raise Exception("Failed to refresh the service account token.")
+            expiry_timestamp = credentials.expiry.timestamp()
+
+        logging.info(f'get_access_token: {access_token}')
         # 更新缓存
         TOKEN_CACHE[current_account_key] = {
-            'access_token': data['access_token'],
-            'expiry_time': time.time() + data['expires_in'] - 120
+            'access_token': access_token,
+            'expiry_time': expiry_timestamp - 120
         }
 
         current_account['failureCount'] = 0
-        return data['access_token']
+        return access_token
     except requests.RequestException as e:
         logging.error(f'Error obtaining access token: {str(e)}')
         # Cleared all token caches
@@ -147,7 +162,7 @@ def get_location(model):
 def construct_api_url(location, model):
     current_account_key = list(ACCOUNTS.keys())[current_account_index]
     current_account = ACCOUNTS[current_account_key]
-    return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['PROJECT_ID']}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict"
+    return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['project_id']}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict"
 
 def merge_messages(messages):
     # 如果 messages 为空,直接返回空列表
@@ -224,7 +239,7 @@ def handle_request():
             'Content-Type': 'application/json; charset=utf-8'
         }
 
-        response = requests.post(api_url, json=request_body, headers=headers, stream=True, proxies=get_proxy())
+        response = requests.post(api_url, json=request_body, headers=headers, stream=True)
         response.raise_for_status()
 
         def generate():
