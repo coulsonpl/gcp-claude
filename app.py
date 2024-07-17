@@ -16,8 +16,15 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# 尝试读取 config.json 文件
+try:
+    with open('config.json', 'r') as config_file:
+        app_config = json.load(config_file)
+except FileNotFoundError:
+    app_config = {}
+
 ACCOUNTS = {}
-API_KEY = os.environ.get('API_KEY')
+API_KEY = app_config.get('api_key') or os.environ.get('API_KEY')
 REFRESH_TOKEN_URL = 'https://www.googleapis.com/oauth2/v4/token'
 AUTH_DEFAULT_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
@@ -29,7 +36,7 @@ version为最新版本, 最新版本以对应模型的Vertex AI页面为准
 locations为可用区域, 多地区配额可叠加。
 支持区域以 https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude 为准
 """
-MODEL_CONFIG = {
+DEFAULT_MODEL_CONFIG = {
     'claude-3-sonnet': {
         'version': 'claude-3-sonnet@20240229',  # 截至2024年6月26日最新版本，仅供展示，下同
         'locations': ["asia-southeast1", "us-central1", "us-east5"]
@@ -48,16 +55,28 @@ MODEL_CONFIG = {
     }
 }
 
-# 解析账户信息
-for key, value in os.environ.items():
-    if key.startswith('ACCOUNT_'):
-        account_name = key.replace('ACCOUNT_', '').lower()
-        try:
-            account_data = json.loads(value)
-            ACCOUNTS[account_name] = {k.lower(): v for k, v in account_data.items()}
+MODEL_CONFIG = app_config.get('models', DEFAULT_MODEL_CONFIG)
+
+# 设置 ACCOUNTS
+ACCOUNTS = {}
+if 'accounts' in app_config:
+    for index, account in enumerate(app_config['accounts']):
+        project_id = account.get('project_id', '').lower()
+        if project_id:
+            account_name = f"{project_id}_{index}"
+            ACCOUNTS[account_name] = {k.lower(): v for k, v in account.items()}
             ACCOUNTS[account_name]['failureCount'] = 0
-        except json.JSONDecodeError:
-            logging.error(f"Error parsing account info for {account_name}")
+
+if not ACCOUNTS:
+    for key, value in os.environ.items():
+        if key.startswith('ACCOUNT_'):
+            account_name = key.replace('ACCOUNT_', '').lower()
+            try:
+                account_data = json.loads(value)
+                ACCOUNTS[account_name] = {k.lower(): v for k, v in account_data.items()}
+                ACCOUNTS[account_name]['failureCount'] = 0
+            except json.JSONDecodeError:
+                logging.error(f"Error parsing account info for {account_name}")
 
 logging.info(f"Loaded accounts: {list(ACCOUNTS.keys())}")
 logging.info(f"API Key configured: {'Yes' if API_KEY else 'No'}")
