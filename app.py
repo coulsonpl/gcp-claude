@@ -185,7 +185,7 @@ def get_location(model):
 def construct_api_url(location, model):
     current_account_key = list(ACCOUNTS.keys())[current_account_index]
     current_account = ACCOUNTS[current_account_key]
-    if model.startswith('meta/llama'):
+    if model.startswith('meta'):
         return f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{current_account['project_id']}/locations/{location}/endpoints/openapi/chat/completions"
     else:
         return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['project_id']}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict"
