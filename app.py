@@ -52,6 +52,10 @@ DEFAULT_MODEL_CONFIG = {
     'claude-3-haiku': {
         'version': 'claude-3-haiku@20240307',
         'locations': ["europe-west1", "europe-west4", "us-central1", "us-east5"]
+    },
+    'meta/llama3-405b-instruct-maas': {
+        'version': 'meta/llama3-405b-instruct-maas',
+        'locations': ["us-central1"]
     }
 }
 
@@ -181,7 +185,10 @@ def get_location(model):
 def construct_api_url(location, model):
     current_account_key = list(ACCOUNTS.keys())[current_account_index]
     current_account = ACCOUNTS[current_account_key]
-    return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['project_id']}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict"
+    if model.startswith('meta/llama'):
+        return f"https://{location}-aiplatform.googleapis.com/v1beta1/projects/{current_account['project_id']}/locations/{location}/endpoints/openapi/chat/completions"
+    else:
+        return f"https://{location}-aiplatform.googleapis.com/v1/projects/{current_account['project_id']}/locations/{location}/publishers/anthropic/models/{model}:streamRawPredict"
 
 def merge_messages(messages):
     # 如果 messages 为空,直接返回空列表
@@ -209,7 +216,7 @@ def merge_messages(messages):
     return merged_messages
 
 @app.route('/v1/messages', methods=['POST'])
-def handle_request():
+def handle_claude_request():
     api_key = request.headers.get('x-api-key')
     if api_key != API_KEY:
         return jsonify({
@@ -268,6 +275,91 @@ def handle_request():
         rotate_account()
 
         return Response(stream_with_context(generate()), content_type=response.headers['Content-Type'])
+
+    except Exception as e:
+        logging.error(f'Error in request: {str(e)}')
+        if str(e) == 'No available accounts':
+            return jsonify({
+                "type": "error",
+                "error": {
+                    "type": "service_unavailable",
+                    "message": "No available accounts. Please try again later."
+                }
+            }), 503
+        else:
+            # Cleared all token caches
+            TOKEN_CACHE.clear() 
+            return jsonify({
+                "type": "error",
+                "error": {
+                    "type": "internal_error",
+                    "message": "An internal error occurred. Please try again later."
+                }
+            }), 500
+
+@app.route('/api/chat', methods=['POST'])
+@app.route('/v1/chat/completions', methods=['POST'])
+def handle_llama_request():
+    # logging.info(f'Request headers: {request.headers}')
+    # 或者认证头的信息并删除前面的Bearer 
+    api_key = request.headers.get('Authorization')[7:]
+    if api_key != API_KEY:
+        return jsonify({
+            "type": "error",
+            "error": {
+                "type": "permission_error",
+                "message": "Invalid API key."
+            }
+        }), 403
+    
+    try:
+        request_body = request.json
+        base_model = request_body['model']        
+        if base_model in list(MODEL_CONFIG.keys()):
+            model = base_model
+        else:
+            return jsonify({
+                "type": "error",
+                "error": {
+                    "type": "invalid_model",
+                    "message": "The specified model is not in the allowed list."
+                }
+            }), 400
+
+        access_token = get_access_token()
+        location = get_location(base_model)
+        api_url = construct_api_url(location, model)
+
+        current_account_key = list(ACCOUNTS.keys())[current_account_index]
+        logging.info(f"Using account: {current_account_key}, location: {location}, request count: {request_count}")
+        # logging.info(f'Request body: {json.dumps(request_body, indent=2)}')
+        logging.info(f'API URL: {api_url}')
+
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json; charset=utf-8'
+        }
+
+        response = requests.post(api_url, json=request_body, headers=headers, stream=True)
+        response.raise_for_status()
+
+        def generate():
+            for chunk in response.iter_content(chunk_size=8192):
+                yield chunk
+
+        rotate_account()
+
+        # 检查request_body中是否存在stream且值为true
+        is_stream = request_body.get('stream', False) == True
+        # 根据is_stream设置content_type
+        content_type = 'text/event-stream; charset=UTF-8' if is_stream else 'application/json; charset=utf-8'
+        return Response(
+            stream_with_context(generate()), 
+            content_type=content_type, 
+            headers={
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': '*'
+            })
 
     except Exception as e:
         logging.error(f'Error in request: {str(e)}')
